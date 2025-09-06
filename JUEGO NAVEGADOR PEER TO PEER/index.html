@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Juego de Cuadrados</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <!-- Menú Principal -->
+    <div id="main-menu" class="menu-container">
+        <h1>Juego de Cuadrados</h1>
+        <div class="menu-buttons">
+            <button id="singleplayer-btn" class="menu-btn">Un Jugador</button>
+            <button id="multiplayer-btn" class="menu-btn">Multijugador</button>
+            <button id="fullscreen-btn" class="menu-btn">Pantalla completa</button>
+        </div>
+    </div>
+
+    <!-- Juego (inicialmente oculto) -->
+    <div id="game-container" class="hidden">
+        <div class="container">
+            <div id="game">
+                <div id="player" class="player"></div>
+                <div id="otherPlayers"></div>
+            </div>
+            <div id="game-controls" class="controls">
+                <div id="multiplayer-controls" class="connection">
+                    <input type="text" id="peerId" placeholder="ID del amigo" />
+                    <button id="connect">Conectar</button>
+                    <div id="myId">Tu ID: <span id="myIdDisplay">Generando ID...</span></div>
+                </div>
+                <button id="back-to-menu" class="back-btn">Volver al Menú</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://unpkg.com/peerjs@1.4.7/dist/peerjs.min.js"></script>
+    <script src="game.js"></script>
+</body>
+</html>
