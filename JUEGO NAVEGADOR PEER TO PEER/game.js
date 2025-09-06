@@ -31,6 +31,10 @@ const PICKUP_HEALTH_AMOUNT = 30; // vida por pickup de vida
 const PICKUP_AMMO_AMOUNT = 18; // balas a la reserva por pickup de munición
 const PICKUP_SPAWN_INTERVAL = 6.0; // cada N segundos intenta aparecer uno
 const PICKUP_MAX_ON_MAP = 6; // máximo simultáneo
+// Infinite Ammo pickup
+const INFINITE_AMMO_DURATION = 10.0; // segundos
+let infiniteAmmoActive = false;
+let infiniteAmmoUntil = 0; // timestamp en segundos
 
 // Arma (pistola)
 const BULLET_SPEED = 600; // px/seg
@@ -134,6 +138,79 @@ const player = {
 // Función para obtener la estamina actual según el modo de juego
 function getCurrentStamina() {
     return staminaStates[gameMode] || STAMINA_MAX;
+}
+
+// ===================== HUD: Infinite Ammo Timer (helpers) =====================
+function ensureInfiniteAmmoHUD() {
+    let cont = document.getElementById('inf-ammo-container');
+    if (!cont) {
+        cont = document.createElement('div');
+        cont.id = 'inf-ammo-container';
+        cont.style.position = 'fixed';
+        // La posición exacta se ajusta dinámicamente bajo la Wave HUD
+        cont.style.top = '170px';
+        cont.style.left = '20px';
+        cont.style.width = '200px';
+        cont.style.zIndex = '1000';
+        const label = document.createElement('div');
+        label.id = 'inf-ammo-label';
+        label.textContent = 'INFINITE AMMO';
+        label.style.color = '#2c3e50';
+        label.style.fontSize = '12px';
+        label.style.fontFamily = "'Press Start 2P', 'VT323', monospace";
+        label.style.marginBottom = '2px';
+        const bar = document.createElement('div');
+        bar.id = 'inf-ammo-bar';
+        bar.style.width = '100%';
+        bar.style.height = '12px';
+        bar.style.background = 'linear-gradient(180deg, #dfe6e9, #b2bec3)';
+        bar.style.border = '2px solid #2d3436';
+        bar.style.borderRadius = '10px';
+        bar.style.overflow = 'hidden';
+        const fill = document.createElement('div');
+        fill.id = 'inf-ammo-fill';
+        fill.style.height = '100%';
+        fill.style.width = '0%';
+        fill.style.background = 'linear-gradient(180deg, #55efc4, #00cec9)';
+        fill.style.boxShadow = 'inset 0 0 4px rgba(0,0,0,0.2)';
+        bar.appendChild(fill);
+        cont.appendChild(label);
+        cont.appendChild(bar);
+        ensureGameHUDRoot().appendChild(cont);
+    } else {
+        cont.style.display = 'block';
+        if (cont.parentElement && cont.parentElement.id !== 'game-hud-root') ensureGameHUDRoot().appendChild(cont);
+    }
+    positionInfiniteAmmoHUD();
+}
+
+function hideInfiniteAmmoHUD() {
+    const cont = document.getElementById('inf-ammo-container');
+    if (cont) cont.style.display = 'none';
+}
+
+function updateInfiniteAmmoHUD() {
+    ensureInfiniteAmmoHUD();
+    const fill = document.getElementById('inf-ammo-fill');
+    if (!fill) return;
+    const total = INFINITE_AMMO_DURATION;
+    const remaining = Math.max(0, infiniteAmmoUntil - Date.now() / 1000);
+    const pct = Math.max(0, Math.min(1, remaining / total));
+    fill.style.width = `${pct * 100}%`;
+}
+
+function positionInfiniteAmmoHUD() {
+    const cont = document.getElementById('inf-ammo-container');
+    if (!cont) return;
+    const wave = document.getElementById('wave-hud');
+    if (wave) {
+        const rect = wave.getBoundingClientRect();
+        cont.style.top = Math.round(rect.top + rect.height + 8) + 'px';
+        cont.style.left = Math.round(rect.left) + 'px';
+    } else {
+        cont.style.top = '170px';
+        cont.style.left = '20px';
+    }
 }
 
 // ===================== Menu HUD (separada del juego) =====================
@@ -439,15 +516,20 @@ function spawnPickup(type) {
     el.style.position = 'absolute';
     el.style.width = PICKUP_SIZE + 'px';
     el.style.height = PICKUP_SIZE + 'px';
-    el.style.borderRadius = '4px';
+    // Todos los pickups como círculos
+    el.style.borderRadius = '50%';
     el.style.boxShadow = '0 0 10px rgba(0,0,0,0.3)';
     el.style.pointerEvents = 'none';
     if (type === 'health') {
         el.style.background = '#e74c3c';
         el.style.border = '2px solid #c0392b';
-    } else {
+    } else if (type === 'ammo') {
         el.style.background = '#f1c40f';
         el.style.border = '2px solid #f39c12';
+    } else if (type === 'infinite') {
+        // Verde oscuro para infinite ammo
+        el.style.background = '#145A32';
+        el.style.border = '2px solid #0E3D21';
     }
 
     // posición aleatoria, evitando muy cerca del jugador
@@ -473,9 +555,12 @@ function trySpawnPickups(currentTimeSec) {
     if (currentTimeSec - lastPickupSpawnTime < PICKUP_SPAWN_INTERVAL) return;
     const hasHealth = pickups.some(p => p.type === 'health');
     const hasAmmo = pickups.some(p => p.type === 'ammo');
+    const hasInf = pickups.some(p => p.type === 'infinite');
     const missing = [];
     if (!hasHealth) missing.push('health');
     if (!hasAmmo) missing.push('ammo');
+    // 20% de probabilidad de intentar spawnear infinito si no hay uno y no está activo
+    if (!hasInf && !infiniteAmmoActive && Math.random() < 0.2) missing.push('infinite');
     if (missing.length === 0) return; // ya hay uno de cada tipo en el mapa
     const type = missing[Math.floor(Math.random() * missing.length)];
     spawnPickup(type);
@@ -510,6 +595,11 @@ function updatePickups() {
                 player.health = Math.min(playerMaxHealth, player.health + PICKUP_HEALTH_AMOUNT);
             } else if (p.type === 'ammo') {
                 ammoReserve += PICKUP_AMMO_AMOUNT;
+            } else if (p.type === 'infinite') {
+                infiniteAmmoActive = true;
+                infiniteAmmoUntil = Date.now() / 1000 + INFINITE_AMMO_DURATION;
+                ensureInfiniteAmmoHUD();
+                updateInfiniteAmmoHUD();
             }
             // Efecto visual y eliminar
             showPickupEffect(p.type, p.x + p.w / 2, p.y + p.h / 2);
@@ -597,9 +687,12 @@ function showPickupEffect(type, worldX, worldY) {
     if (type === 'health') {
         txt.textContent = '+HP';
         txt.style.color = '#e74c3c';
-    } else {
+    } else if (type === 'ammo') {
         txt.textContent = '+AMMO';
         txt.style.color = '#f1c40f';
+    } else if (type === 'infinite') {
+        txt.textContent = 'INFINITE AMMO';
+        txt.style.color = '#2ecc71';
     }
     game.appendChild(txt);
     // Animar hacia arriba y desvanecer
@@ -651,7 +744,12 @@ function ensureAmmoTextHUD() {
 function updateAmmoTextHUD() {
     const cont = document.getElementById('ammo-text-only');
     if (!cont) return;
-    cont.textContent = `AMMO: ${ammoInMag} / ${ammoReserve}${isReloading ? ' (recargando...)' : ''}`;
+    if (infiniteAmmoActive) {
+        const remaining = Math.max(0, Math.ceil(infiniteAmmoUntil - Date.now() / 1000));
+        cont.textContent = `AMMO: ∞ ( ${remaining}s )`;
+    } else {
+        cont.textContent = `AMMO: ${ammoInMag} / ${ammoReserve}${isReloading ? ' (recargando...)' : ''}`;
+    }
 }
 
 // ===================== Pantalla Completa =====================
@@ -693,8 +791,8 @@ function shoot() {
     const now = Date.now() / 1000;
     if (now - player.lastShotTime < FIRE_COOLDOWN) return;
     // Bloquear disparo si no hay balas en el cargador
-    if (isReloading) return;
-    if (ammoInMag <= 0) return;
+    if (isReloading && !infiniteAmmoActive) return;
+    if (ammoInMag <= 0 && !infiniteAmmoActive) return;
     player.lastShotTime = now;
 
     const mw = getMouseWorld();
@@ -719,8 +817,10 @@ function shoot() {
 
     bullets.push({ x: sx - 3, y: sy - 3, w: 6, h: 6, vx: dx * BULLET_SPEED, vy: dy * BULLET_SPEED, el, ttl: 1.5 });
 
-    // Consumir una bala del cargador
-    ammoInMag = Math.max(0, ammoInMag - 1);
+    // Consumir una bala del cargador (no si es infinito)
+    if (!infiniteAmmoActive) {
+        ammoInMag = Math.max(0, ammoInMag - 1);
+    }
 }
 
 let isFiring = false;
@@ -1126,91 +1226,96 @@ function spawnEnemies(count = ENEMY_COUNT) {
         if (e.hpEl) e.hpEl.remove();
     });
     enemies = [];
-    const type = getWaveEnemyType();
-    const stats = getEnemyStats(type);
     for (let i = 0; i < count; i++) {
-        const en = document.createElement('div');
-        en.className = 'enemy';
-        en.style.position = 'absolute';
-        en.style.width = '20px';
-        en.style.height = '20px';
-        en.style.background = stats.color;
-        en.style.border = `2px solid ${stats.border}`;
-        en.style.boxShadow = `0 0 10px ${stats.glow}`;
-        en.style.borderRadius = '4px';
-        let ex = 0, ey = 0;
-        do {
-            ex = Math.floor(Math.random() * (GAME_WIDTH - 26));
-            ey = Math.floor(Math.random() * (GAME_HEIGHT - 26));
-        } while (Math.hypot(ex - player.x, ey - player.y) < 200);
+        const x = Math.floor(Math.random() * (GAME_WIDTH - 30));
+        const y = Math.floor(Math.random() * (GAME_HEIGHT - 30));
+        const type = getWaveEnemyType();
+        const stats = getEnemyStats(type);
+        const enemy = document.createElement('div');
+        enemy.className = 'enemy';
+        enemy.style.position = 'absolute';
+        enemy.style.left = x + 'px';
+        enemy.style.top = y + 'px';
+        enemy.style.width = '30px';
+        enemy.style.height = '30px';
+        enemy.style.background = stats.color;
+        enemy.style.border = `2px solid ${stats.border}`;
+        enemy.style.boxShadow = `0 0 10px ${stats.glow}`;
+        enemy.style.borderRadius = '6px';
+        enemy.style.zIndex = '2';
+        cont.appendChild(enemy);
 
-        en.style.left = ex + 'px';
-        en.style.top = ey + 'px';
-        cont.appendChild(en);
-        // etiqueta de vida encima de la cabeza
-        const hp = document.createElement('div');
-        hp.className = 'enemy-hp';
-        hp.style.position = 'absolute';
-        hp.style.color = '#fff';
-        hp.style.fontSize = '10px';
-        hp.style.fontFamily = 'Arial, sans-serif';
-        hp.style.textShadow = '0 1px 2px rgba(0,0,0,0.6)';
-        hp.style.pointerEvents = 'none';
-        hp.style.zIndex = '3';
-        hp.textContent = String(stats.health);
-        cont.appendChild(hp);
-        enemies.push({ x: ex, y: ey, w: 20, h: 20, el: en, hpEl: hp,
-            health: stats.health, damage: stats.damage, xpReward: stats.xpReward, type,
-            isDashing: false, dashStartTime: 0, lastDashTime: 0, dashDir: { x: 0, y: 0 } });
+        // Crear barra de vida sobre el enemigo
+        const hpWrap = document.createElement('div');
+        hpWrap.style.position = 'absolute';
+        hpWrap.style.left = x + 'px';
+        hpWrap.style.top = (y - 12) + 'px';
+        hpWrap.style.width = '30px';
+        hpWrap.style.height = '10px';
+        hpWrap.style.background = 'rgba(0,0,0,0.35)';
+        hpWrap.style.border = '2px solid #2d3436';
+        hpWrap.style.borderRadius = '10px';
+        hpWrap.style.overflow = 'hidden';
+        hpWrap.style.pointerEvents = 'none';
+        const hpFill = document.createElement('div');
+        hpFill.style.height = '100%';
+        hpFill.style.width = '100%';
+        hpFill.style.background = 'linear-gradient(180deg, #ff7675, #d63031)';
+        hpWrap.appendChild(hpFill);
+        cont.appendChild(hpWrap);
+
+        enemies.push({ x, y, w: 30, h: 30, el: enemy, type, health: stats.health, maxHealth: stats.health, damage: stats.damage, isDashing: false, dashStartTime: 0, xpReward: stats.xpReward, hpEl: hpWrap, hpFill, lastDashTime: 0 });
     }
 }
 
 function updateEnemies(deltaTime) {
-    if (!enemies.length) return;
-    const nowSec = Date.now() / 1000;
-    const px = player.x + player.width / 2;
-    const py = player.y + player.height / 2;
-    enemies.forEach(en => {
-        // mover hacia el jugador
-        const dx = px - en.x;
-        const dy = py - en.y;
-        const dist = Math.hypot(dx, dy) || 1;
-        const dirx = dx / dist;
-        const diry = dy / dist;
-        // gestionar dash
-        if (en.isDashing) {
-            const t = nowSec - en.dashStartTime;
-            const speed = ENEMY_SPEED * ENEMY_DASH_SPEED_MULT;
-            en.x = Math.max(0, Math.min(GAME_WIDTH - en.w, en.x + dirx * speed));
-            en.y = Math.max(0, Math.min(GAME_HEIGHT - en.h, en.y + diry * speed));
-            if (en.el) en.el.style.boxShadow = '0 0 18px rgba(231, 76, 60, 0.95)';
-            if (t >= ENEMY_DASH_DURATION) {
-                en.isDashing = false;
-                en.lastDashTime = nowSec;
-                if (en.el) en.el.style.boxShadow = '0 0 10px rgba(231, 76, 60, 0.6)';
-            }
-        } else {
-            // intentar iniciar dash si cerca y cooldown
-            if (dist < ENEMY_DASH_TRIGGER_DISTANCE && (nowSec - en.lastDashTime) >= ENEMY_DASH_COOLDOWN) {
-                en.isDashing = true;
-                en.dashStartTime = nowSec;
-                en.dashDir = { x: dirx, y: diry };
-            }
-            // movimiento normal
-            en.x = Math.max(0, Math.min(GAME_WIDTH - en.w, en.x + dirx * ENEMY_SPEED));
-            en.y = Math.max(0, Math.min(GAME_HEIGHT - en.h, en.y + diry * ENEMY_SPEED));
-        }
+if (!enemies.length) return;
+const nowSec = Date.now() / 1000;
+const px = player.x + player.width / 2;
+const py = player.y + player.height / 2;
+enemies.forEach(en => {
+// mover hacia el jugador
+const dx = px - en.x;
+const dy = py - en.y;
+const dist = Math.hypot(dx, dy) || 1;
+const dirx = dx / dist;
+const diry = dy / dist;
+// gestionar dash
+if (en.isDashing) {
+const t = nowSec - en.dashStartTime;
+const speed = ENEMY_SPEED * ENEMY_DASH_SPEED_MULT;
+en.x = Math.max(0, Math.min(GAME_WIDTH - en.w, en.x + dirx * speed));
+en.y = Math.max(0, Math.min(GAME_HEIGHT - en.h, en.y + diry * speed));
+if (en.el) en.el.style.boxShadow = '0 0 18px rgba(231, 76, 60, 0.95)';
+if (t >= ENEMY_DASH_DURATION) {
+en.isDashing = false;
+en.lastDashTime = nowSec;
+if (en.el) en.el.style.boxShadow = '0 0 10px rgba(231, 76, 60, 0.6)';
+}
+} else {
+// intentar iniciar dash si cerca y cooldown
+if (dist < ENEMY_DASH_TRIGGER_DISTANCE && (nowSec - en.lastDashTime) >= ENEMY_DASH_COOLDOWN) {
+en.isDashing = true;
+en.dashStartTime = nowSec;
+en.dashDir = { x: dirx, y: diry };
+}
+// movimiento normal
+en.x = Math.max(0, Math.min(GAME_WIDTH - en.w, en.x + dirx * ENEMY_SPEED));
+en.y = Math.max(0, Math.min(GAME_HEIGHT - en.h, en.y + diry * ENEMY_SPEED));
+}
         
-        // actualizar DOM
-        if (en.el) {
-            en.el.style.left = en.x + 'px';
-            en.el.style.top = en.y + 'px';
-        }
-        if (en.hpEl) {
-            en.hpEl.style.left = (en.x + en.w / 2 - 8) + 'px';
-            en.hpEl.style.top = (en.y - 12) + 'px';
-            en.hpEl.textContent = String(Math.max(0, Math.ceil(en.health)));
-        }
+// Actualizar posición del elemento del enemigo
+if (en.el) {
+en.el.style.left = en.x + 'px';
+en.el.style.top = en.y + 'px';
+}
+// Actualizar barra de vida: posición y fill
+if (en.hpEl) {
+en.hpEl.style.left = en.x + 'px';
+en.hpEl.style.top = (en.y - 12) + 'px';
+const pct = Math.max(0, Math.min(1, en.health / (en.maxHealth || 1)));
+if (en.hpFill) en.hpFill.style.width = `${pct * 100}%`;
+}
         
         // colisión simple AABB
         if (rectsOverlap(player.x, player.y, player.width, player.height, en.x, en.y, en.w, en.h)) {
@@ -1390,6 +1495,9 @@ function updateMinimap() {
             if (p.type === 'health') {
                 dot.style.background = '#e74c3c';
                 dot.style.border = '1px solid #c0392b';
+            } else if (p.type === 'infinite') {
+                dot.style.background = '#145A32';
+                dot.style.border = '1px solid #0E3D21';
             } else {
                 dot.style.background = '#f1c40f';
                 dot.style.border = '1px solid #f39c12';
@@ -2045,6 +2153,11 @@ function update() {
     const currentTime = now / 1000; // Tiempo actual en segundos
     const deltaTime = (now - player.lastUpdate) / 1000; // Tiempo en segundos desde la última actualización
     player.lastUpdate = now;
+    // Actualizar estado de Infinite Ammo
+    if (infiniteAmmoActive && (now / 1000) >= infiniteAmmoUntil) {
+        infiniteAmmoActive = false;
+        updateAmmoTextHUD();
+    }
 
     // Si hay QTE o LevelUp activo, actualizar overlays y pausar el resto del juego
     if (qteActive || levelUpActive) {
@@ -2417,6 +2530,8 @@ function render() {
     updateWaveHUD();
     // Actualizar barra de XP
     try { updateXPBarHUD(); } catch (_) {}
+    // Actualizar HUD de Infinite Ammo si está activo
+    if (infiniteAmmoActive) updateInfiniteAmmoHUD(); else hideInfiniteAmmoHUD();
 
     // Actualizar minimapa
     updateMinimap();
